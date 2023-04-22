@@ -492,7 +492,8 @@ int diskCreateFile( unsigned long long base, dentry_t *dentry, file_t *file )
 
 	/* Task 1a: Prepare fcb_t for symlink */
 	/* Set the uid and type files of fcb */
-
+    fcb->uid = file->owner.uid;
+	fcb->type = file->type;
 	/* set file data into file block */
 	fcb->flags = file->flags;
 	/* XXX initialize attributes */

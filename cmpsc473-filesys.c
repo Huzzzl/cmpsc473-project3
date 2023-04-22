@@ -328,7 +328,27 @@ dir_t *fsParentDir( struct path *p, unsigned int constrain )
 	p->stopat = 0;
 
 	/* Add code here */
-
+	if (p->num < 3){
+		return pdir;
+	}
+	p->stopat = 1;
+    while(1){
+		char *name =  p->name[p->stopat];
+		/*char *s = "/";
+		strcat(name, s);*/
+		dentry_t *tempdentry = fsFindDentry(pdir, name, strlen(name), constrain);
+		if (tempdentry->type == DTYPE_DIR){
+			pdir = tempdentry->dir;
+			if (p->stopat == p->num - 2){
+			    break;
+		    }
+			p->stopat +=1 ;
+			continue;
+		}
+		else{
+			return NULL;
+		}
+	}
 	return pdir;
 }
 
@@ -1017,11 +1037,17 @@ int fileLink( char *target, char *name, unsigned int constrain )
 {
 	/* only follow directory symlinks */
 	constrain |= FLAG_NOFOLLOW;
-
 	/* Task 1b: Create a symbolic link */
+	int fd = fileCreate(name,0,constrain);
+	if (fd < 0){
+		return -1;
+	}
+	fileWrite(fd,target,strlen(target));
+	fileClose(fd);
 
 
-	return -1;
+
+	return 0;
 }
 
 
