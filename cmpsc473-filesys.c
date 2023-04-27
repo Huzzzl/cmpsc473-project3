@@ -341,17 +341,22 @@ dir_t *fsParentDir( struct path *p, unsigned int constrain )
 {
 	/* Task 2 */
 	dir_t *pdir = fsRootDir();
-	p->stopat = 0;
+	p->stopat = 1;
 
 	/* Add code here */
 	if (p->num < 3){
+        char *name =  p->name[p->stopat];
+		p->dentry = fsFindDentry(pdir, name, strlen(name), constrain);
+	    p->stopat = 0;
 		return pdir;
 	}
-	p->stopat = 1;
     while(1){
 		char *name =  p->name[p->stopat];
 		p->dentry = fsFindDentry(pdir, name, strlen(name), constrain);
 		p->dir = pdir;
+		if (p->dentry == NULL){
+			return NULL;
+		}
 		if (p->dentry->type == DTYPE_DIR){
 			if (!p->dentry->dir){
 				fsDirInitialize( p->dentry, D_NONE,diskFindDir( p->dentry->diskdentry ));
@@ -846,31 +851,14 @@ path_t *fsResolveName( char *name, unsigned int constrain )
 		if (path->dentry && path->dentry->type == DTYPE_FILE && path->dentry->file == NULL){
 		    path->dentry->file = fsFindFile(path->dir,path->dentry,path->name[path->stopat],1,FTYPE_SYMLINK,strlen(path->name[path->stopat]));
 	    }
-        if (path->dentry->file->type == FTYPE_SYMLINK){
+        if (path->dentry && path->dentry->file->type == FTYPE_SYMLINK){
 			char *n_path = (char *)malloc(MAX_PATH_SIZE);
 			fsGetLinkTarget( path->dentry->file, n_path, MAX_PATH_SIZE);
             path = pathMergeWithSymlink( path, n_path );
 			dir = fsParentDir( path, constrain );
-			/*dir = path->dir;
-			while(1){
-				char *n = path->name[path->stopat];
-				path->dentry = fsFindDentry( dir, n, strlen(n), constrain );
-				if (path->dentry->type == DTYPE_DIR){
-					dir = path->dentry->dir;
-					path->dir = dir;
-					if(path->stopat == path->num-2){
-						break;
-					}
-					path->stopat += 1;
-					continue;
-				}
-			    else{
-					path->err = E_Resolve;
-		            goto error;
-				}
-			}*/
 		}
-        else{
+        if (path->dentry == NULL){
+			path->stopat = 0;
 			path->err = E_Resolve; /* cannot retrieve parent dir */
 		    goto error;
 		}
