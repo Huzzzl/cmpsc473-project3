@@ -195,8 +195,24 @@ int pathFullyResolved( path_t *p )
 path_t *pathMergeWithSymlink( path_t *p, char *newpath )
 {
 	/* Task 3a (optional) */
-	
-	return NULL;
+	path_t *new = pathParse(newpath);
+	char* temp[MAX_PATH_SIZE];
+	int i,j,k;
+	j = 0;
+	for (i = p->stopat + 1;i < p->num; i++){
+		temp[j] = p->name[i];
+		j += 1;
+	}
+	for (i = 1;i < new->num ; i++){
+		p->name[i] = new->name[i];
+	}
+	k = 0;
+	for (i = new->num; i < new->num + j; i++){
+		p->name[i] = temp[k];
+		k += 1;
+	}
+	p->num = new->num + j;
+	return p;
 }
 
 
@@ -334,18 +350,22 @@ dir_t *fsParentDir( struct path *p, unsigned int constrain )
 	p->stopat = 1;
     while(1){
 		char *name =  p->name[p->stopat];
-		/*char *s = "/";
-		strcat(name, s);*/
-		dentry_t *tempdentry = fsFindDentry(pdir, name, strlen(name), constrain);
-		if (tempdentry->type == DTYPE_DIR){
-			pdir = tempdentry->dir;
+		p->dentry = fsFindDentry(pdir, name, strlen(name), constrain);
+		p->dir = pdir;
+		if (p->dentry->type == DTYPE_DIR){
+			if (!p->dentry->dir){
+				fsDirInitialize( p->dentry, D_NONE,diskFindDir( p->dentry->diskdentry ));
+			}
+			pdir = p->dentry->dir;
 			if (p->stopat == p->num - 2){
+				free(name);
 			    break;
 		    }
 			p->stopat +=1 ;
 			continue;
 		}
 		else{
+			free(name);
 			return NULL;
 		}
 	}
@@ -823,8 +843,37 @@ path_t *fsResolveName( char *name, unsigned int constrain )
 	/* get the in-memory representation of our directory (perhaps on disk) */
 	dir = fsParentDir( path, constrain );
 	if ( dir == NULL ) {
-		path->err = E_Resolve; /* cannot retrieve parent dir */
-		goto error;
+		if (path->dentry && path->dentry->type == DTYPE_FILE && path->dentry->file == NULL){
+		    path->dentry->file = fsFindFile(path->dir,path->dentry,path->name[path->stopat],1,FTYPE_SYMLINK,strlen(path->name[path->stopat]));
+	    }
+        if (path->dentry->file->type == FTYPE_SYMLINK){
+			char *n_path = (char *)malloc(MAX_PATH_SIZE);
+			fsGetLinkTarget( path->dentry->file, n_path, MAX_PATH_SIZE);
+            path = pathMergeWithSymlink( path, n_path );
+			dir = fsParentDir( path, constrain );
+			/*dir = path->dir;
+			while(1){
+				char *n = path->name[path->stopat];
+				path->dentry = fsFindDentry( dir, n, strlen(n), constrain );
+				if (path->dentry->type == DTYPE_DIR){
+					dir = path->dentry->dir;
+					path->dir = dir;
+					if(path->stopat == path->num-2){
+						break;
+					}
+					path->stopat += 1;
+					continue;
+				}
+			    else{
+					path->err = E_Resolve;
+		            goto error;
+				}
+			}*/
+		}
+        else{
+			path->err = E_Resolve; /* cannot retrieve parent dir */
+		    goto error;
+		}
 	}
 
 	/* get the dentry name to resolve */
@@ -835,6 +884,26 @@ path_t *fsResolveName( char *name, unsigned int constrain )
 
 	/* retrieve in-memory dentry for this name */
 	dentry = fsFindDentry( dir, name, name_size, constrain );
+	if (dentry == NULL){
+		goto end;
+	}
+
+    if (dentry && dentry->type == DTYPE_FILE && dentry->file == NULL){
+		dentry->file = fsFindFile(dir,dentry,name,1,FTYPE_SYMLINK,strlen(name));
+	}
+
+	if(dentry && dentry->file && dentry->type == DTYPE_FILE && dentry->file->type == FTYPE_SYMLINK){ //symbolic link
+		char *n_path = (char *)malloc(MAX_PATH_SIZE);
+		fsGetLinkTarget(dentry->file,n_path,MAX_PATH_SIZE);
+		path = pathParse( n_path );
+		dir = fsParentDir( path, constrain );
+		name = pathNextName( path );
+		if ( !name )
+		    goto end;
+		name_size = strlen( name );
+		dentry = fsFindDentry( dir, name, name_size, constrain );
+		goto end;
+	}
 
 end:
 	path->dir = dir;
@@ -1038,13 +1107,86 @@ int fileLink( char *target, char *name, unsigned int constrain )
 	/* only follow directory symlinks */
 	constrain |= FLAG_NOFOLLOW;
 	/* Task 1b: Create a symbolic link */
-	int fd = fileCreate(name,0,constrain);
+	int fd;
+	path_t *path;
+
+	path = fsResolveName(name,constrain);
+	if (!path){
+		return -1;
+	}
+
+
+    int index;
+	int rtn;
+	unsigned int name_size;
+	file_t *file;
+	dentry_t *newdentry;
+	
+    name = pathNextName( path );
+	if ( !name ){
+	    pathError( path );
+		return -1;
+	}
+	name_size = strlen( name );
+
+	/* =======  verify file does not already exist -- first in the filetable */
+	file = fsCacheFindFile( fs->filetable, name, path->dir, 0, FTYPE_SYMLINK, name_size );
+	if ( file ) {
+		path->err = E_AlreadyOpen; /* file already exists in file table */
+	    pathError( path );
+		return -1;
+	}
+
+	/* Again retrieve the in-memory dentry for this name because
+	   we need to ignore the saved name constraint to find existing entries. */
+	path->dentry = fsFindDentry( path->dir, name, name_size, (constrain & ~FLAG_SAVEDNAME) );
+
+	if ( path->dentry ) {
+		path->err = E_Exists; /* already exists on disk */
+		pathError( path );
+		pathFree(path);
+		return -1;
+	}
+
+	/* =======  now build the file */
+	/* build a blank in-memory directory entry for the new file */
+	newdentry = fsDentryInitialize( name, (ddentry_t *)NULL, name_size, DTYPE_FILE );
+
+	/* add in-memory dentry to in-memory directory */
+	fsAddDentry( path->dir, newdentry );
+
+	/* create file in memory */
+	file = fsFileInitialize( path->dir, newdentry, name, 0, FTYPE_SYMLINK, name_size, (fcb_t *)NULL );
+
+	/* add dentry to disk */
+	diskCreateDentry( (unsigned long long)fs->base, path->dir, newdentry );
+
+	/* add file to disk */
+	rtn = diskCreateFile( (unsigned long long)fs->base, newdentry, file );
+	if ( rtn ) {
+		errorMessage("fileCreate: fail diskCreateFile()");
+		pathError( path );
+		return -1;
+	}
+
+	/* add file in system-wide file table */
+	index = fsAddFile( fs->filetable, file );
+	if ( index < 0 ){
+	    pathError( path );
+		return -1;
+	}
+
+	/* add file to per-process file table */
+	fd = fsAddProcFile( fs->proc, file );
+
+
 	if (fd < 0){
 		return -1;
 	}
+    
 	fileWrite(fd,target,strlen(target));
 	fileClose(fd);
-
+    pathFree(path);
 
 
 	return 0;
@@ -1065,7 +1207,15 @@ int fileLink( char *target, char *name, unsigned int constrain )
 int fsGetLinkTarget( file_t *file, char *target, unsigned int target_len )
 {
 	/* Task 3a (optional) */
-
+	int fd = fsAddProcFile( fs->proc, file );
+	if (fd == -1){
+		return -1;
+	}
+	int r = fileRead(fd,target,target_len);
+	if (r == -1){
+		return -1;
+	}
+	fileClose(fd);
 	return 0;
 }
 
