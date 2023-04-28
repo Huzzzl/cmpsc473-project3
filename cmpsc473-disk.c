@@ -200,7 +200,14 @@ int diskStrCompare( ddir_t *diskdir, char *name1, unsigned int name1_size, char 
 int diskCheckDentryConstraint( ddentry_t *disk_dentry, char *name, unsigned int name_size, unsigned int constrain )
 {
 	/* Task 4c: Verify the constaint FLAG_SAVEDNAME */
-
+    if (constrain == FLAG_SAVEDNAME) {
+		if (disk_dentry->name != name){
+			return FALSE;
+		}
+		if (disk_dentry->name_size != name_size){
+			return FALSE;
+		}
+	}
 	return TRUE;
 }
 

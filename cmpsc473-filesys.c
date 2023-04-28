@@ -433,6 +433,9 @@ dentry_t *fsFindDentry( dir_t *dir, char *name, unsigned int name_size, unsigned
 	/* Task 4c: Using diskCheckDentryConstraint(...), verify the constraints
 	 * for this dentry. If the constraints do not match, then return NULL.
 	 */
+	 if (dentry && !diskCheckDentryConstraint(dentry->diskdentry, name, name_size,constrain)){
+		return NULL;
+	 }
 
 
 
@@ -851,6 +854,11 @@ path_t *fsResolveName( char *name, unsigned int constrain )
 		    path->dentry->file = fsFindFile(path->dir,path->dentry,path->name[path->stopat],1,FTYPE_SYMLINK,strlen(path->name[path->stopat]));
 	    }
         if (path->dentry && path->dentry->file->type == FTYPE_SYMLINK){
+			if(( constrain == FLAG_NOFOLLOW_UNTRUSTED && !fsUserHasPerm( path->dentry->file, &user ) )){
+				path->err = E_UntrustedLink;
+				path->stopat -= 1;
+				goto error;
+			}
 			char *n_path = (char *)malloc(MAX_PATH_SIZE);
 			fsGetLinkTarget( path->dentry->file, n_path, MAX_PATH_SIZE);
             path = pathMergeWithSymlink( path, n_path );
@@ -880,6 +888,10 @@ path_t *fsResolveName( char *name, unsigned int constrain )
 	}
 
 	if(dentry && dentry->file && dentry->type == DTYPE_FILE && dentry->file->type == FTYPE_SYMLINK){ //symbolic link
+	    if(( constrain == FLAG_NOFOLLOW_UNTRUSTED && !fsUserHasPerm( path->dentry->file, &user ) )){
+			path->err = E_UntrustedLink;
+			goto error;
+		}
 		char *n_path = (char *)malloc(MAX_PATH_SIZE);
 		path_t *newpath;
 		fsGetLinkTarget(dentry->file,n_path,MAX_PATH_SIZE);
