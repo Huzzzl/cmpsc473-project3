@@ -363,14 +363,12 @@ dir_t *fsParentDir( struct path *p, unsigned int constrain )
 			}
 			pdir = p->dentry->dir;
 			if (p->stopat == p->num - 2){
-				free(name);
 			    break;
 		    }
 			p->stopat +=1 ;
 			continue;
 		}
 		else{
-			free(name);
 			return NULL;
 		}
 	}
@@ -845,6 +843,7 @@ path_t *fsResolveName( char *name, unsigned int constrain )
 		return NULL;
 	}
 
+
 	/* get the in-memory representation of our directory (perhaps on disk) */
 	dir = fsParentDir( path, constrain );
 	if ( dir == NULL ) {
@@ -882,14 +881,21 @@ path_t *fsResolveName( char *name, unsigned int constrain )
 
 	if(dentry && dentry->file && dentry->type == DTYPE_FILE && dentry->file->type == FTYPE_SYMLINK){ //symbolic link
 		char *n_path = (char *)malloc(MAX_PATH_SIZE);
+		path_t *newpath;
 		fsGetLinkTarget(dentry->file,n_path,MAX_PATH_SIZE);
-		path = pathParse( n_path );
-		dir = fsParentDir( path, constrain );
-		name = pathNextName( path );
+		newpath = pathParse( n_path );
+		dir = fsParentDir( newpath, constrain );
+		name = pathNextName( newpath );
 		if ( !name )
 		    goto end;
 		name_size = strlen( name );
 		dentry = fsFindDentry( dir, name, name_size, constrain );
+		if (constrain == FLAG_NOFOLLOW && dentry->type == DTYPE_FILE){
+
+			path->err = E_Open;
+			goto error;
+		}
+		path = newpath;
 		goto end;
 	}
 
@@ -1093,7 +1099,6 @@ int fileCreate( char *name, unsigned int flags, unsigned int constrain )
 int fileLink( char *target, char *name, unsigned int constrain )
 {
 	/* only follow directory symlinks */
-	constrain |= FLAG_NOFOLLOW;
 	/* Task 1b: Create a symbolic link */
 	int fd;
 	path_t *path;
@@ -1106,19 +1111,20 @@ int fileLink( char *target, char *name, unsigned int constrain )
 
     int index;
 	int rtn;
+	char *name2;
 	unsigned int name_size;
 	file_t *file;
 	dentry_t *newdentry;
 	
-    name = pathNextName( path );
-	if ( !name ){
+    name2 = pathNextName( path );
+	if ( !name2 ){
 	    pathError( path );
 		return -1;
 	}
-	name_size = strlen( name );
+	name_size = strlen( name2 );
 
 	/* =======  verify file does not already exist -- first in the filetable */
-	file = fsCacheFindFile( fs->filetable, name, path->dir, 0, FTYPE_SYMLINK, name_size );
+	file = fsCacheFindFile( fs->filetable, name2, path->dir, 0, FTYPE_SYMLINK, name_size );
 	if ( file ) {
 		path->err = E_AlreadyOpen; /* file already exists in file table */
 	    pathError( path );
@@ -1127,9 +1133,11 @@ int fileLink( char *target, char *name, unsigned int constrain )
 
 	/* Again retrieve the in-memory dentry for this name because
 	   we need to ignore the saved name constraint to find existing entries. */
-	path->dentry = fsFindDentry( path->dir, name, name_size, (constrain & ~FLAG_SAVEDNAME) );
+	path->dentry = fsFindDentry( path->dir, name2, name_size, (constrain & ~FLAG_SAVEDNAME) );
 
 	if ( path->dentry ) {
+		path = pathParse(name);
+		path->stopat = 0;
 		path->err = E_Exists; /* already exists on disk */
 		pathError( path );
 		pathFree(path);
@@ -1138,13 +1146,13 @@ int fileLink( char *target, char *name, unsigned int constrain )
 
 	/* =======  now build the file */
 	/* build a blank in-memory directory entry for the new file */
-	newdentry = fsDentryInitialize( name, (ddentry_t *)NULL, name_size, DTYPE_FILE );
+	newdentry = fsDentryInitialize( name2, (ddentry_t *)NULL, name_size, DTYPE_FILE );
 
 	/* add in-memory dentry to in-memory directory */
 	fsAddDentry( path->dir, newdentry );
 
 	/* create file in memory */
-	file = fsFileInitialize( path->dir, newdentry, name, 0, FTYPE_SYMLINK, name_size, (fcb_t *)NULL );
+	file = fsFileInitialize( path->dir, newdentry, name2, 0, FTYPE_SYMLINK, name_size, (fcb_t *)NULL );
 
 	/* add dentry to disk */
 	diskCreateDentry( (unsigned long long)fs->base, path->dir, newdentry );
